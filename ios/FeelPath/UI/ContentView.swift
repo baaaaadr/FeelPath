@@ -70,7 +70,7 @@ struct ContentView: View {
     private var patternTests: some View {
         GroupBox("Feel the patterns") {
             HStack {
-                ForEach([Alert.obstacle, .veryClose, .stairsDown], id: \.self) { alert in
+                ForEach([FeelPathCore.Alert.obstacle, .veryClose, .stairsDown], id: \.self) { alert in
                     Button(alert.title) { model.preview(alert) }
                         .buttonStyle(.bordered)
                         .frame(maxWidth: .infinity)
@@ -119,7 +119,7 @@ struct ContentView: View {
         }
     }
 
-    private func icon(for alert: Alert) -> String {
+    private func icon(for alert: FeelPathCore.Alert) -> String {
         switch alert {
         case .clear: return "figure.walk"
         case .obstacle: return "exclamationmark.triangle.fill"
@@ -128,7 +128,7 @@ struct ContentView: View {
         }
     }
 
-    private func color(for alert: Alert) -> Color {
+    private func color(for alert: FeelPathCore.Alert) -> Color {
         switch alert {
         case .clear: return .green
         case .obstacle: return .orange
