@@ -10,7 +10,7 @@ FeelPath gives people with visual impairments early warning of obstacles and dro
 
 ## 1. Motivation
 
-A conventional white cane detects only what it touches: obstacles at ground level within about one metre. It gives no warning of objects at waist or chest height, such as table edges, open cabinet doors or vehicle mirrors. It also reports drop-offs (stairs, kerbs, platform edges) only when the tip is already over the edge. FeelPath adds a forward-looking depth sensor and turns what it sees into a small set of distinct vibration patterns, so the user's hearing stays free for the environment.
+A conventional white cane detects only what it touches: obstacles at ground level within about one metre. It gives no warning of objects at chest or head height with free space beneath them, such as open cabinet doors, low branches, signs or vehicle mirrors. It also reports drop-offs (stairs, kerbs, platform edges) only when the tip is already over the edge. FeelPath adds a forward-looking depth sensor and turns what it sees into a small set of distinct vibration patterns, so the user's hearing stays free for the environment.
 
 ## 2. Stage 1 objectives
 
@@ -27,13 +27,16 @@ The patterns differ in rhythm and duration rather than intensity alone, so that 
 
 ![Haptic pattern design sketch](docs/haptic-patterns.png)
 
+*The design sketch covers the first three cues; the head-height cue was added afterwards.*
+
 | Cue | Pattern | Default trigger |
 |---|---|---|
 | **Obstacle ahead** | Two medium pulses (120 ms, 250 ms apart), repeated every 1.0 s | Obstacle in the walking corridor within 2.0 m |
 | **Very close** | Six short, sharp pulses (50 ms, 100 ms apart), repeated continuously | Obstacle within 0.8 m |
 | **Stairs down** | One long, soft pulse (700 ms), repeated every 1.6 s | Floor ahead drops by 14 cm or more |
+| **Head height** | Three hard, crisp knocks (40 ms, 120 ms apart), repeated every 0.9 s | Overhanging obstacle within 2.0 m (Section 5.5) |
 
-When several conditions apply, the most urgent cue wins: *very close* > *stairs down* > *obstacle ahead*. Only one cue plays at a time, and a change of cue interrupts the current pattern immediately.
+When several conditions apply, the most urgent cue wins: *very close* > *head height* > *stairs down* > *obstacle ahead*. *Head height* ranks above the other warnings because the cane gives no tactile backup for an overhang. *Very close* ranks above it because stopping is the safe response to any imminent contact. Only one cue plays at a time, and a change of cue interrupts the current pattern immediately.
 
 ## 4. System architecture
 
@@ -43,11 +46,12 @@ When several conditions apply, the most urgent cue wins: *very close* > *stairs 
  │                                                              │
  │  DepthSensor ── ARKit, LiDAR smoothed scene depth, ~15 Hz    │
  │      │  depth pixels → 3-D points (gravity-aligned)          │
+ │      │  + tracked floor plane (floor memory)                 │
  │      ▼                                                       │
  │  ┌────────────────────────────────────────────────────────┐  │
  │  │ FeelPathCore (platform-independent Swift package)      │  │
  │  │   SceneAnalyzer → floor height, obstacle distance,     │  │
- │  │                   floor-drop flag                      │  │
+ │  │                   overhang distance, floor-drop flag   │  │
  │  │   AlertDecider  → current cue (hysteresis, debounce)   │  │
  │  │   HapticPattern → pulse timings for each cue           │  │
  │  └────────────────────────────────────────────────────────┘  │
@@ -75,20 +79,34 @@ Only points inside a **70 cm-wide corridor**, at most **4 m** ahead, are analyse
 
 ### 5.2 Floor estimation
 
-The floor height is the median of the lower half of point heights found **0.3–1.2 m ahead**. Using the lower half stops nearby objects from biasing the estimate upward. At least 15 points are required. Otherwise the floor is marked *unknown*: obstacle detection falls back to an assumed device height of 1 m, and stairs detection is turned off for that frame.
+The floor height is resolved from three sources, in order of preference:
+
+1. **Measured:** the median of the lower half of point heights found **0.3–1.2 m ahead** (at least 15 points). Using the lower half stops nearby objects from biasing the estimate upward.
+2. **Remembered:** when the near floor is out of view, for example because the phone is pitched up, the height of the floor plane that ARKit detected earlier and is still tracking. Of the planes classified as *floor* that lie 0.3–2.5 m below the phone, the highest one is used, so a lower floor seen down a staircase is ignored.
+3. **Assumed:** otherwise, a device height of 1 m. With an assumed floor, obstacle detection continues, but stairs and overhang detection are turned off for that frame.
 
 ### 5.3 Obstacle detection
 
-An obstacle point is any corridor point between **12 cm and 2 m above the floor**. If at least 12 such points exist, the reported distance is their **10th-percentile forward distance**. This is a conservative estimate of the nearest surface that is robust to isolated noise.
+An obstacle point is any corridor point between **12 cm above the floor and the user's height plus 10 cm**. The user's height is a setting in the app (default 1.75 m), so objects the user can walk under are not reported. If at least 12 such points exist, the reported distance is their **10th-percentile forward distance**. This is a conservative estimate of the nearest surface that is robust to isolated noise.
 
 ### 5.4 Drop-off (stairs down) detection
 
 In the zone **0.8–2.5 m ahead**, the app takes the points at ground level or below and counts how many lie **more than 14 cm below the floor**. The 14 cm threshold is just below a standard stair riser of 15–18 cm. A frame reports a drop when at least 20 points are lowered **and** they make up at least 30 % of the ground points in that zone.
 
-### 5.5 Temporal filtering
+### 5.5 Overhang (head height) detection
+
+An overhang is an obstacle at chest or head height with free space beneath it, which a cane sweeping the ground will not touch. The corridor is divided into 10 cm slices by forward distance. A slice contains an overhang when:
+
+- at least 8 points lie **1.0 m or more above the floor** (up to the user's height plus 10 cm), **and**
+- at most 3 points lie in the **gap band (12–60 cm above the floor)** in that slice and the two next to it, **and**
+- at least 10 floor points are visible from 20 cm before the slice to 1 m beyond it.
+
+The third condition is the important one. An empty gap only means *free space* if the sensor can actually see the floor through it. Otherwise it may simply be out of view. A wall fails the second condition, and a table top (about 75 cm high) lies between the two bands, so it remains an ordinary obstacle. The reported distance is that of the nearest such slice.
+
+### 5.6 Temporal filtering
 
 - **Hysteresis:** an active distance cue stays on until the obstacle is 15 cm beyond its threshold. This prevents the cue from flickering at the boundary.
-- **Debouncing:** *stairs down* starts only after 3 consecutive drop frames (about 0.2 s) and stops after 5 consecutive frames without a drop.
+- **Debouncing:** *stairs down* starts only after 3 consecutive drop frames (about 0.2 s) and stops after 5 consecutive frames without a drop. *Head height* starts after 2 consecutive overhang frames.
 
 All parameters are in `AnalyzerConfig` and `DeciderConfig` ([SceneAnalyzer.swift](ios/Core/Sources/FeelPathCore/SceneAnalyzer.swift), [AlertDecider.swift](ios/Core/Sources/FeelPathCore/AlertDecider.swift)).
 
@@ -97,9 +115,9 @@ All parameters are in `AnalyzerConfig` and `DeciderConfig` ([SceneAnalyzer.swift
 The app is a single screen designed for testing rather than end use:
 
 - **Status panel:** the current cue (colour-coded), the distance to the nearest obstacle, and a start/stop control.
-- **Settings:** adjustable *obstacle* and *very close* distances, a switch to turn stairs detection on or off, haptic mute, and VoiceOver announcements of cue changes.
+- **Settings:** adjustable *obstacle* and *very close* distances, the user's height (saved between launches), switches to turn stairs and head-height detection on or off, haptic mute, and VoiceOver announcements of cue changes.
 - **Pattern preview:** plays each haptic pattern on demand, for user familiarisation.
-- **Diagnostics:** tracking state, processing rate, corridor point count, estimated floor height and the drop flag.
+- **Diagnostics:** tracking state, processing rate, corridor point count, floor height and its source (measured, remembered or assumed), overhang distance and the drop flag.
 
 While sensing is running, the screen does not lock. Sensing stops when the app goes into the background, so the user is never left relying on a cue that has silently stopped.
 
@@ -107,7 +125,7 @@ While sensing is running, the screen does not lock. Sensing stops when the app g
 
 | Level | Scope | Status |
 |---|---|---|
-| Unit tests | Floor estimation, obstacle detection inside and outside the corridor, step-down versus shallow-dip discrimination, hysteresis, stairs debouncing, cue priority, pattern timing | Passing (13 tests) |
+| Unit tests | Floor estimation and floor memory, obstacle detection inside and outside the corridor, user-height limit, step-down versus shallow-dip discrimination, overhang versus wall versus table classification, hysteresis, debouncing, cue priority, pattern timing | Passing (24 tests) |
 | Continuous integration | Unit tests on Linux; iOS simulator build; unsigned device build packaged as an `.ipa` | Passing on every push |
 | On-device | Installation and launch on iPhone 17 Pro Max | Done |
 | Field evaluation | See Section 8 | Not started |
@@ -122,24 +140,26 @@ While sensing is running, the screen does not lock. Sensing stops when the app g
 | Device pitch: level, 30° down, 60° down | Sensitivity to how the cane is held |
 | Bright sunlight; low light indoors | Limits of the LiDAR sensor |
 | Glass doors, mirrors | Known failure mode of the sensor |
+| Open cabinet door, low branch, sign at head height | Overhang detection rate; false alarms on walls and tables |
+| Pitch up, then walk on with the floor out of view | Floor memory keeps heights correct (diagnostics show *remembered*) |
 | Blind identification of the three patterns | Whether the haptic vocabulary can be told apart |
 
 Measures: detection rate, false-alarm rate, warning distance, and cue identification accuracy.
 
 ## 9. Known limitations
 
-- **Device pitch:** stairs detection requires the floor 0.3–1.2 m ahead to be in view, which means a downward pitch of roughly 30°. Held level, the drop cue is disabled.
+- **Conflicting pitch requirements:** stairs detection needs the floor 0.3–1.2 m ahead in view (a downward pitch of roughly 30°), whereas head-height obstacles are only in view when the phone is held close to level. Floor memory keeps heights correct when the phone pitches up, but one sensor cannot see both regions at once. The best compromise pitch is to be determined in field tests.
 - **No direction information:** the system reports *that* something is ahead, not on which side.
 - **Unseen drop-offs:** a drop with no returning LiDAR signal (very dark, specular, or out of range) is not reported as a drop.
 - **Sensor physics:** transparent and reflective surfaces, and strong sunlight, reduce LiDAR reliability.
-- **Not detected yet:** obstacles above 2 m, and stairs going up.
+- **Not detected yet:** stairs going up.
 - **Foreground only:** sensing requires the app to stay open in the foreground.
 
 ## 10. Roadmap
 
 1. **Stage 1 completion:** run the field evaluation, tune the thresholds, and refine the patterns based on user feedback.
-2. **Stage 1 extensions:** a left/right clearance cue, an upward-stairs cue, and detection of obstacles at head height.
-3. **Stage 2:** a dedicated cane module (time-of-flight depth sensor, microcontroller, vibration motor in the grip) running a port of FeelPathCore.
+2. **Stage 1 extensions:** a left/right clearance cue and an upward-stairs cue.
+3. **Stage 2:** a dedicated cane module (time-of-flight depth sensors, microcontroller, vibration motor in the grip) running a port of FeelPathCore. It would use a second, upward-angled sensor dedicated to head height, which removes the pitch conflict described in Section 9.
 
 ## 11. Building and installing
 

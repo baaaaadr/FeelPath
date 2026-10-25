@@ -4,6 +4,7 @@
 //   Obstacle ahead   ▇ ▇           2 medium pulses, repeated every second
 //   Very close       ▌▌▌▌▌▌        fast short pulses, continuous
 //   Stairs down      ▇▇▇▇▇▇        1 long pulse, repeated every 1.6 s
+//   Head height      ▌▌▌           3 sharp knocks, repeated every 0.9 s
 
 public struct HapticPulse: Sendable, Equatable {
     /// Start, relative to the pattern start (seconds).
@@ -57,6 +58,15 @@ public struct HapticPattern: Sendable, Equatable {
         pulses: [HapticPulse(time: 0, duration: 0.7, intensity: 0.9, sharpness: 0.2)],
         period: 1.6
     )
+
+    /// Three hard, crisp knocks then a pause: rhythmically distinct from the continuous
+    /// "very close" rattle and from the softer two-pulse "obstacle ahead".
+    public static let headHeight = HapticPattern(
+        pulses: (0..<3).map { i in
+            HapticPulse(time: Double(i) * 0.12, duration: 0.04, intensity: 1.0, sharpness: 1.0)
+        },
+        period: 0.9
+    )
 }
 
 public extension Alert {
@@ -66,6 +76,7 @@ public extension Alert {
         case .obstacle: return .obstacleAhead
         case .veryClose: return .veryClose
         case .stairsDown: return .stairsDown
+        case .headHeight: return .headHeight
         }
     }
 
@@ -75,6 +86,7 @@ public extension Alert {
         case .obstacle: return "Obstacle ahead"
         case .veryClose: return "Very close"
         case .stairsDown: return "Stairs down"
+        case .headHeight: return "Head height"
         }
     }
 }

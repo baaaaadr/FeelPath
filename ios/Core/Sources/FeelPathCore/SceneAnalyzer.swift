@@ -1,6 +1,7 @@
 // Turns a cloud of LiDAR points (already expressed relative to the phone, gravity-aligned)
-// into two facts: how far the nearest obstacle in the walking corridor is, and whether the
-// floor drops away ahead (stairs / kerb down).
+// into three facts: how far the nearest obstacle in the walking corridor is, whether part of it
+// is an overhang at head / upper-body height with free space beneath (which a cane sweeping the
+// ground will not touch), and whether the floor drops away ahead (stairs / kerb down).
 //
 // Coordinate frame of `DepthPoint` (metres):
 //   forward  horizontal distance in the direction the phone faces (gravity removed)
@@ -26,8 +27,10 @@ public struct AnalyzerConfig: Sendable, Equatable {
     public var maxRange: Float = 4.0
     /// Anything this far above the floor counts as an obstacle (filters floor noise / small bumps).
     public var minObstacleHeight: Float = 0.12
-    /// Ignore things above head height (ceilings, signs high above).
-    public var maxObstacleHeight: Float = 2.0
+    /// The user's height. Obstacles up to `userHeight + headroom` above the floor are reported;
+    /// anything higher is something the user can walk under.
+    public var userHeight: Float = 1.75
+    public var headroom: Float = 0.10
     /// Fewer obstacle points than this in the corridor is treated as noise.
     public var minObstaclePoints = 12
     /// Percentile of obstacle forward distances reported (low = conservative, robust to outliers).
@@ -36,7 +39,7 @@ public struct AnalyzerConfig: Sendable, Equatable {
     /// Zone right in front of the user where we measure the floor height.
     public var floorZone: ClosedRange<Float> = 0.3...1.2
     public var minFloorPoints = 15
-    /// Used when the floor zone has no usable points (e.g. phone pointing too high).
+    /// Used when the floor is neither measured nor remembered (e.g. phone pointing too high).
     public var fallbackFloorHeight: Float = -1.0
 
     /// Zone ahead where a drop is looked for.
@@ -47,23 +50,61 @@ public struct AnalyzerConfig: Sendable, Equatable {
     /// Fraction of ground-level points in the drop zone that must be dropped.
     public var minDropFraction: Float = 0.3
 
+    /// Overhang: obstacle points at least this high above the floor…
+    public var overhangMinHeight: Float = 1.0
+    /// …with (almost) nothing between `minObstacleHeight` and this height beneath them.
+    public var overhangGapMaxHeight: Float = 0.6
+    public var minOverhangPoints = 8
+    /// More points than this in the gap means the object reaches down: not an overhang.
+    public var maxGapPoints = 3
+    /// The floor must be seen at or beyond the overhang to prove the gap is really empty
+    /// (rather than just out of the sensor's view).
+    public var minGroundBeyondOverhang = 10
+    /// Forward bin size used to line up overhang points with what is beneath them.
+    public var binSize: Float = 0.1
+
     public init() {}
+
+    /// Highest point above the floor that still counts as an obstacle.
+    public var maxObstacleHeight: Float { userHeight + headroom }
+}
+
+/// Where the floor height in a reading came from.
+public enum FloorSource: String, Sendable {
+    /// Measured from depth points just ahead of the user in this frame.
+    case measured
+    /// Not visible in this frame; taken from the floor plane ARKit tracked earlier.
+    case remembered
+    /// Unknown; `AnalyzerConfig.fallbackFloorHeight` was used.
+    case assumed
 }
 
 public struct SceneReading: Sendable, Equatable {
     /// Forward distance to the nearest obstacle in the corridor, nil when clear.
     public var obstacleDistance: Float?
+    /// Forward distance to the nearest overhang (upper body / head height, free space beneath).
+    public var overhangDistance: Float?
     /// True when the floor ahead falls away (stairs or kerb down).
     public var floorDrop: Bool
-    /// Estimated floor height relative to the phone (negative), nil if the fallback was used.
+    /// Floor height relative to the phone (negative), nil when `floorSource == .assumed`.
     public var floorHeight: Float?
+    public var floorSource: FloorSource
     /// Number of points analysed (for the debug panel).
     public var pointCount: Int
 
-    public init(obstacleDistance: Float? = nil, floorDrop: Bool = false, floorHeight: Float? = nil, pointCount: Int = 0) {
+    public init(
+        obstacleDistance: Float? = nil,
+        overhangDistance: Float? = nil,
+        floorDrop: Bool = false,
+        floorHeight: Float? = nil,
+        floorSource: FloorSource = .assumed,
+        pointCount: Int = 0
+    ) {
         self.obstacleDistance = obstacleDistance
+        self.overhangDistance = overhangDistance
         self.floorDrop = floorDrop
         self.floorHeight = floorHeight
+        self.floorSource = floorSource
         self.pointCount = pointCount
     }
 
@@ -72,32 +113,77 @@ public struct SceneReading: Sendable, Equatable {
 
 public enum SceneAnalyzer {
 
-    public static func analyze(_ points: [DepthPoint], config: AnalyzerConfig = AnalyzerConfig()) -> SceneReading {
+    /// - Parameter floorHint: floor height relative to the phone from an earlier, still-tracked
+    ///   floor plane. Used only when the floor cannot be measured in this frame.
+    public static func analyze(
+        _ points: [DepthPoint],
+        floorHint: Float? = nil,
+        config: AnalyzerConfig = AnalyzerConfig()
+    ) -> SceneReading {
         let corridor = points.filter {
             abs($0.lateral) <= config.corridorHalfWidth && $0.forward > 0.05 && $0.forward <= config.maxRange
         }
 
-        let floor = estimateFloor(corridor, config: config)
+        let floor: Float?
+        let source: FloorSource
+        if let measured = estimateFloor(corridor, config: config) {
+            (floor, source) = (measured, .measured)
+        } else if let floorHint {
+            (floor, source) = (floorHint, .remembered)
+        } else {
+            (floor, source) = (nil, .assumed)
+        }
         let floorHeight = floor ?? config.fallbackFloorHeight
 
-        // Obstacles: anything standing up out of the floor, below head height.
+        let binCount = Int((config.maxRange / config.binSize).rounded(.up)) + 1
+        var gapBins = [Int](repeating: 0, count: binCount)
+        var groundBins = [Int](repeating: 0, count: binCount)
+        var overhangBins = [Float?](repeating: nil, count: binCount)   // nearest forward per bin
+        var overhangCounts = [Int](repeating: 0, count: binCount)
+
         var obstacleForwards: [Float] = []
         var dropped = 0
         var groundInDropZone = 0
         for p in corridor {
             let above = p.height - floorHeight
+            let bin = min(binCount - 1, Int(p.forward / config.binSize))
+
             if above >= config.minObstacleHeight && above <= config.maxObstacleHeight {
                 obstacleForwards.append(p.forward)
-            }
-            if config.dropZone.contains(p.forward) && above < config.minObstacleHeight {
-                groundInDropZone += 1
-                if above < -config.dropThreshold { dropped += 1 }
+                if above <= config.overhangGapMaxHeight {
+                    gapBins[bin] += 1
+                } else if above >= config.overhangMinHeight {
+                    overhangCounts[bin] += 1
+                    overhangBins[bin] = min(overhangBins[bin] ?? .infinity, p.forward)
+                }
+            } else if above < config.minObstacleHeight {
+                groundBins[bin] += 1
+                if config.dropZone.contains(p.forward) {
+                    groundInDropZone += 1
+                    if above < -config.dropThreshold { dropped += 1 }
+                }
             }
         }
 
         var obstacleDistance: Float?
         if obstacleForwards.count >= config.minObstaclePoints {
             obstacleDistance = percentile(&obstacleForwards, config.obstaclePercentile)
+        }
+
+        // An overhang is only claimed when we know where the floor is: otherwise "nothing in the
+        // gap" may just mean "gap measured against the wrong floor".
+        var overhangDistance: Float?
+        if floor != nil {
+            for bin in 0..<binCount where overhangCounts[bin] >= config.minOverhangPoints {
+                let near = max(0, bin - 1)...min(binCount - 1, bin + 1)
+                let gap = near.reduce(0) { $0 + gapBins[$1] }
+                let beyond = max(0, bin - 2)...min(binCount - 1, bin + 10)
+                let ground = beyond.reduce(0) { $0 + groundBins[$1] }
+                if gap <= config.maxGapPoints && ground >= config.minGroundBeyondOverhang {
+                    overhangDistance = overhangBins[bin]
+                    break   // bins are in forward order: the first match is the nearest
+                }
+            }
         }
 
         // Only trust a drop when we actually know where the floor is.
@@ -107,8 +193,10 @@ public enum SceneAnalyzer {
 
         return SceneReading(
             obstacleDistance: obstacleDistance,
+            overhangDistance: overhangDistance,
             floorDrop: floorDrop,
             floorHeight: floor,
+            floorSource: source,
             pointCount: corridor.count
         )
     }

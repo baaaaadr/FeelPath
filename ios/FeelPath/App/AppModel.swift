@@ -22,6 +22,14 @@ final class AppModel {
     var obstacleRange: Float = 2.0 { didSet { decider.config.obstacleRange = obstacleRange } }
     var veryCloseRange: Float = 0.8 { didSet { decider.config.veryCloseRange = veryCloseRange } }
     var stairsEnabled = true { didSet { decider.config.stairsEnabled = stairsEnabled } }
+    var headEnabled = true { didSet { decider.config.headEnabled = headEnabled } }
+    /// Sets how high above the floor obstacles are still reported. Saved across launches.
+    var userHeight: Float = AppModel.savedUserHeight {
+        didSet {
+            UserDefaults.standard.set(userHeight, forKey: Self.userHeightKey)
+            sensor.analyzerConfig.userHeight = userHeight
+        }
+    }
 
     let lidarSupported = DepthSensor.isSupported
     var hapticsSupported: Bool { haptics.isAvailable }
@@ -32,7 +40,14 @@ final class AppModel {
     @ObservationIgnored private var readingCount = 0
     @ObservationIgnored private var rateTimer: Timer?
 
+    nonisolated private static let userHeightKey = "userHeight"
+    nonisolated private static var savedUserHeight: Float {
+        let stored = UserDefaults.standard.float(forKey: userHeightKey)
+        return stored > 0 ? stored : 1.75
+    }
+
     init() {
+        sensor.analyzerConfig.userHeight = userHeight
         sensor.onReading = { [weak self] in self?.handle($0) }
         sensor.onStatus = { [weak self] in self?.status = $0 }
     }

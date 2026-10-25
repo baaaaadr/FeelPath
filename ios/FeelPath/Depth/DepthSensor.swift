@@ -6,8 +6,13 @@
 // lets us measure "forward distance" and "height above the floor" no matter how the phone is
 // held, which is what makes the stairs-down check possible at all.
 //
+// Floor memory: horizontal plane detection runs alongside depth. ARKit keeps tracking a floor
+// plane after it leaves the camera's view, so when the phone is pitched up (to see head-height
+// obstacles) the floor height is still known and heights stay accurate.
+//
 // Threading: ARKit calls the delegate on `queue`. All analysis happens there; only the final
-// reading crosses to the main actor.
+// reading crosses to the main actor. `analyzerConfig` is set from main and read on `queue`,
+// so it is guarded by a lock.
 
 import ARKit
 import FeelPathCore
@@ -24,7 +29,12 @@ final class DepthSensor: NSObject, ARSessionDelegate {
     /// Called on the main actor with a human-readable status.
     var onStatus: (@MainActor (String) -> Void)?
 
-    var analyzerConfig = AnalyzerConfig()
+    var analyzerConfig: AnalyzerConfig {
+        get { configLock.withLock { _analyzerConfig } }
+        set { configLock.withLock { _analyzerConfig = newValue } }
+    }
+    private var _analyzerConfig = AnalyzerConfig()
+    private let configLock = NSLock()
 
     private let session = ARSession()
     private let queue = DispatchQueue(label: "feelpath.depth", qos: .userInteractive)
@@ -49,7 +59,8 @@ final class DepthSensor: NSObject, ARSessionDelegate {
         // Smoothed depth: temporally filtered, far less speckle for one frame of latency.
         config.frameSemantics = [.smoothedSceneDepth]
         config.worldAlignment = .gravity
-        config.planeDetection = []
+        // Horizontal planes give us the floor memory (see header).
+        config.planeDetection = [.horizontal]
         session.run(config, options: [.resetTracking, .removeExistingAnchors])
         report(status: "Starting…")
     }
@@ -67,7 +78,11 @@ final class DepthSensor: NSObject, ARSessionDelegate {
 
         guard let depth = frame.smoothedSceneDepth ?? frame.sceneDepth else { return }
         collectPoints(depth: depth, camera: frame.camera)
-        let reading = SceneAnalyzer.analyze(points, config: analyzerConfig)
+        let reading = SceneAnalyzer.analyze(
+            points,
+            floorHint: rememberedFloor(in: frame),
+            config: analyzerConfig
+        )
         if let onReading {
             Task { @MainActor in onReading(reading) }
         }
@@ -93,6 +108,24 @@ final class DepthSensor: NSObject, ARSessionDelegate {
 
     func sessionWasInterrupted(_ session: ARSession) {
         report(status: "Interrupted")
+    }
+
+    // MARK: Floor memory
+
+    /// Height (relative to the phone) of the floor the user is standing on, from ARKit's tracked
+    /// floor planes: the highest plane classified as floor that is 0.3–2.5 m below the phone.
+    /// Taking the highest one ignores a lower floor seen down a staircase.
+    private func rememberedFloor(in frame: ARFrame) -> Float? {
+        guard ARPlaneAnchor.isClassificationSupported else { return nil }
+        let phoneY = frame.camera.transform.columns.3.y
+        var best: Float?
+        for case let plane as ARPlaneAnchor in frame.anchors where plane.alignment == .horizontal {
+            guard case .floor = plane.classification else { continue }
+            let relative = plane.transform.columns.3.y - phoneY
+            guard relative <= -0.3, relative >= -2.5 else { continue }
+            best = max(best ?? -.infinity, relative)
+        }
+        return best
     }
 
     // MARK: Depth → points

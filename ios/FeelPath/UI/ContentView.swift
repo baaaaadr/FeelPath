@@ -60,7 +60,9 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 12) {
                 slider("Obstacle alert within", value: $model.obstacleRange, range: 1...4)
                 slider("Very close within", value: $model.veryCloseRange, range: 0.3...1.5)
+                slider("Your height", value: $model.userHeight, range: 1.3...2.1, step: 0.05, digits: 2)
                 Toggle("Detect stairs down", isOn: $model.stairsEnabled)
+                Toggle("Detect head-height obstacles", isOn: $model.headEnabled)
                 Toggle("Mute haptics", isOn: $model.hapticsMuted)
                 Toggle("Announce changes (VoiceOver)", isOn: $model.announceChanges)
             }
@@ -69,11 +71,12 @@ struct ContentView: View {
 
     private var patternTests: some View {
         GroupBox("Feel the patterns") {
-            HStack {
-                ForEach([FeelPathCore.Alert.obstacle, .veryClose, .stairsDown], id: \.self) { alert in
-                    Button(alert.title) { model.preview(alert) }
-                        .buttonStyle(.bordered)
-                        .frame(maxWidth: .infinity)
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())]) {
+                ForEach([FeelPathCore.Alert.obstacle, .veryClose, .stairsDown, .headHeight], id: \.self) { alert in
+                    Button { model.preview(alert) } label: {
+                        Text(alert.title).frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
                 }
             }
             .font(.footnote)
@@ -90,6 +93,8 @@ struct ContentView: View {
                 row("Readings / s", "\(model.readingsPerSecond)")
                 row("Points in corridor", "\(model.reading.pointCount)")
                 row("Floor below phone", model.reading.floorHeight.map { String(format: "%.2f m", -$0) } ?? "—")
+                row("Floor source", model.reading.floorSource.rawValue)
+                row("Overhang", model.reading.overhangDistance.map { String(format: "%.1f m", $0) } ?? "none")
                 row("Floor drop", model.reading.floorDrop ? "yes" : "no")
             }
             .font(.footnote.monospacedDigit())
@@ -104,10 +109,16 @@ struct ContentView: View {
         return String(format: "%.1f m", d)
     }
 
-    private func slider(_ label: String, value: Binding<Float>, range: ClosedRange<Float>) -> some View {
+    private func slider(
+        _ label: String,
+        value: Binding<Float>,
+        range: ClosedRange<Float>,
+        step: Float = 0.1,
+        digits: Int = 1
+    ) -> some View {
         VStack(alignment: .leading) {
-            Text("\(label): \(String(format: "%.1f", value.wrappedValue)) m")
-            Slider(value: value, in: range, step: 0.1)
+            Text("\(label): \(String(format: "%.\(digits)f", value.wrappedValue)) m")
+            Slider(value: value, in: range, step: step)
         }
     }
 
@@ -125,6 +136,7 @@ struct ContentView: View {
         case .obstacle: return "exclamationmark.triangle.fill"
         case .veryClose: return "hand.raised.fill"
         case .stairsDown: return "figure.stairs"
+        case .headHeight: return "exclamationmark.octagon.fill"
         }
     }
 
@@ -134,6 +146,7 @@ struct ContentView: View {
         case .obstacle: return .orange
         case .veryClose: return .red
         case .stairsDown: return .purple
+        case .headHeight: return .blue
         }
     }
 }
