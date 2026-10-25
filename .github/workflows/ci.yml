@@ -38,7 +38,7 @@ jobs:
       - name: Generate project
         working-directory: ios
         run: xcodegen
-      - name: Build
+      - name: Build for simulator
         working-directory: ios
         run: |
           xcodebuild build \
@@ -46,3 +46,27 @@ jobs:
             -scheme FeelPath \
             -destination 'generic/platform=iOS Simulator' \
             CODE_SIGNING_ALLOWED=NO
+      # Unsigned device build, packaged as an .ipa. Sideloadly (Windows) or AltStore signs it
+      # with a free Apple ID at install time — no Mac or paid developer account needed.
+      - name: Build for device (unsigned)
+        working-directory: ios
+        run: |
+          xcodebuild build \
+            -project FeelPath.xcodeproj \
+            -scheme FeelPath \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
+      - name: Package IPA
+        working-directory: ios
+        run: |
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/FeelPath.app Payload/
+          zip -qry FeelPath-unsigned.ipa Payload
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: FeelPath-unsigned-ipa
+          path: ios/FeelPath-unsigned.ipa
+          retention-days: 30

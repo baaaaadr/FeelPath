@@ -52,19 +52,32 @@ docs/
 
 ## Running it on your iPhone
 
-To build and install an iOS app you need **a Mac with Xcode 16 or later**. Windows can edit the code but can't build it. A free Apple ID works for installing on your own phone; the app then has to be re-installed every 7 days.
+### From Windows (no Mac needed)
+
+GitHub Actions compiles the app on a cloud Mac. You sign and install it from Windows with a free Apple ID.
+
+**One-time setup**
+1. Install **iTunes** from apple.com (not the Microsoft Store version). Sideloadly needs its USB drivers.
+2. Install **[Sideloadly](https://sideloadly.io)**.
+3. On the iPhone, the *Developer Mode* switch (Settings → Privacy & Security) shows up only after the first install. You'll turn it on during step 4 below.
+
+**Each install**
+1. Push to `main`, or start the workflow by hand (*Actions → CI → Run workflow*).
+2. When the run turns green, open it and download the **FeelPath-unsigned-ipa** artifact. Unzip it to get `FeelPath-unsigned.ipa`.
+3. Plug in the iPhone, open Sideloadly, drag in the `.ipa`, enter your Apple ID, and click **Start**.
+4. On the iPhone, open Settings → General → VPN & Device Management, then trust your Apple ID. Turn on Developer Mode if asked, and let the phone restart.
+5. Open FeelPath and allow camera access.
+
+With a free Apple ID the app expires after **7 days**. Re-run step 3 to refresh it. (A paid Apple Developer account, $99/yr, would allow TestFlight installs that last 90 days.)
+
+### From a Mac (if you ever have one)
 
 ```bash
 brew install xcodegen
-cd ios
-xcodegen
-open FeelPath.xcodeproj
+cd ios && xcodegen && open FeelPath.xcodeproj
 ```
 
-Then in Xcode:
-1. Select the **FeelPath** target → *Signing & Capabilities* → choose your team (your Apple ID). If the bundle id `com.feelpath.app` is taken, change it to something unique.
-2. Plug in the iPhone, enable **Developer Mode** on it (Settings → Privacy & Security), and select it as the run destination.
-3. Press ▶︎. Allow camera access on first launch.
+Choose your team under *Signing & Capabilities*, select the iPhone, and press ▶︎.
 
 The simulator can build the app but has no LiDAR or Taptic Engine, so all real testing is on the device.
 
@@ -82,7 +95,7 @@ On Windows with Docker Desktop running:
 docker run --rm -v "$PWD/ios/Core:/src" -w /src swift:6.1 swift test
 ```
 
-CI (GitHub Actions) runs these tests on Linux and builds the iOS app for the simulator on every push.
+CI (GitHub Actions) runs these tests on Linux, builds the app for the simulator, and produces an unsigned `.ipa` for sideloading on every push.
 
 ## Field-testing checklist
 
