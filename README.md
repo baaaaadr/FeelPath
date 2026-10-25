@@ -57,14 +57,13 @@ docs/
 GitHub Actions compiles the app on a cloud Mac. You sign and install it from Windows with a free Apple ID.
 
 **One-time setup**
-1. Install **iTunes** from apple.com (not the Microsoft Store version). Sideloadly needs its USB drivers.
-2. Install **[Sideloadly](https://sideloadly.io)**.
-3. On the iPhone, the *Developer Mode* switch (Settings → Privacy & Security) shows up only after the first install. You'll turn it on during step 4 below.
+1. Install **[iLoader](https://github.com/nab138/iloader)**.
+2. On the iPhone, the *Developer Mode* switch (Settings → Privacy & Security) shows up only after the first install. You'll turn it on during step 4 below.
 
 **Each install**
 1. Push to `main`, or start the workflow by hand (*Actions → CI → Run workflow*).
 2. When the run turns green, open it and download the **FeelPath-unsigned-ipa** artifact. Unzip it to get `FeelPath-unsigned.ipa`.
-3. Plug in the iPhone, open Sideloadly, drag in the `.ipa`, enter your Apple ID, and click **Start**.
+3. Plug in the iPhone, open iLoader, sign in with your Apple ID, and install `FeelPath-unsigned.ipa` with it.
 4. On the iPhone, open Settings → General → VPN & Device Management, then trust your Apple ID. Turn on Developer Mode if asked, and let the phone restart.
 5. Open FeelPath and allow camera access.
 

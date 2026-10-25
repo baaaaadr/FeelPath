@@ -46,7 +46,7 @@ jobs:
             -scheme FeelPath \
             -destination 'generic/platform=iOS Simulator' \
             CODE_SIGNING_ALLOWED=NO
-      # Unsigned device build, packaged as an .ipa. Sideloadly (Windows) or AltStore signs it
+      # Unsigned device build, packaged as an .ipa. iLoader (Windows) or AltStore signs it
       # with a free Apple ID at install time — no Mac or paid developer account needed.
       - name: Build for device (unsigned)
         working-directory: ios
